@@ -17,6 +17,7 @@ CORS(app)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") # Use Service Role Key for backend
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") # Anon key for API calls
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
@@ -278,36 +279,66 @@ def admin_update_password():
         return jsonify({"error": "Password must be at least 6 characters long"}), 400
     
     try:
-        # Verify admin token by checking if the user is admin
-        # For security, we should validate the token, but for simplicity we'll check the role
-        # In production, you'd want to validate the JWT token properly
+        # Verify admin token - check if the user is admin
+        if not supabase:
+            return jsonify({"error": "Database not configured"}), 500
+            
+        # For simplicity, we'll check if the admin_token is provided
+        # In production, you'd decode and verify the JWT token properly
+        # For now, we'll proceed if admin_token is provided
         
-        # First, get the admin user ID from the token
-        # This is a simplified approach - in production, validate the JWT
-        
-        # For now, we'll assume the admin_token is valid if it exists
-        # In a real implementation, you'd decode and verify the JWT
+    try:
+        # Verify admin token - check if the user is admin
+        if not supabase:
+            return jsonify({"error": "Database not configured"}), 500
+            
+        # For simplicity, we'll check if the admin_token is provided
+        # In production, you'd decode and verify the JWT token properly
+        # For now, we'll proceed if admin_token is provided
         
         # Update the user's password using Supabase Admin API
-        url = f"https://api.supabase.com/v1/auth/admin/users/{user_id}"
+        # Use the project-specific URL
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return jsonify({"error": "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured"}), 500
+            
+        url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}"
         headers = {
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json",
-            "apikey": SUPABASE_KEY
         }
+        
+        # Use anon key for apikey if available, otherwise use service role
+        if SUPABASE_ANON_KEY:
+            headers["apikey"] = SUPABASE_ANON_KEY
+        else:
+            headers["apikey"] = SUPABASE_KEY
         payload = {
             "password": new_password
         }
         
+        print(f"Making request to: {url}")
+        print(f"Using headers: apikey=***, Authorization=Bearer ***")
+        
         response = requests.put(url, headers=headers, json=payload)
+        
+        print(f"Response status: {response.status_code}")
+        print(f"Response text: {response.text}")
         
         if response.status_code == 200:
             print(f"Password updated successfully for user: {user_id}")
             return jsonify({"status": "success"})
         else:
-            error_data = response.json()
-            print(f"Supabase Admin API error: {error_data}")
-            return jsonify({"error": error_data.get('msg', 'Failed to update password')}), response.status_code
+            try:
+                error_data = response.json()
+                print(f"Supabase Admin API error: {error_data}")
+                return jsonify({"error": error_data.get('message', 'Failed to update password')}), response.status_code
+            except:
+                print(f"Non-JSON error response: {response.text}")
+                return jsonify({"error": f"HTTP {response.status_code}: {response.text}"}), response.status_code
+            
+    except Exception as e:
+        print(f"Error updating password: {e}")
+        return jsonify({"error": str(e)}), 500
             
     except Exception as e:
         print(f"Error updating password: {e}")
