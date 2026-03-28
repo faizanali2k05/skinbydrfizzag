@@ -45,6 +45,9 @@ node_modules/
 .flutter-plugins-dependencies
 .pub-cache/
 
+# Project folders
+skinbydrfizzag/
+
 # Misc
 *.log
 .DS_Store
