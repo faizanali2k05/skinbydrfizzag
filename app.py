@@ -287,15 +287,6 @@ def admin_update_password():
         # In production, you'd decode and verify the JWT token properly
         # For now, we'll proceed if admin_token is provided
         
-    try:
-        # Verify admin token - check if the user is admin
-        if not supabase:
-            return jsonify({"error": "Database not configured"}), 500
-            
-        # For simplicity, we'll check if the admin_token is provided
-        # In production, you'd decode and verify the JWT token properly
-        # For now, we'll proceed if admin_token is provided
-        
         # Update the user's password using Supabase Admin API
         # Use the project-specific URL
         if not SUPABASE_URL or not SUPABASE_KEY:
@@ -332,13 +323,9 @@ def admin_update_password():
                 error_data = response.json()
                 print(f"Supabase Admin API error: {error_data}")
                 return jsonify({"error": error_data.get('message', 'Failed to update password')}), response.status_code
-            except:
+            except Exception:
                 print(f"Non-JSON error response: {response.text}")
                 return jsonify({"error": f"HTTP {response.status_code}: {response.text}"}), response.status_code
-            
-    except Exception as e:
-        print(f"Error updating password: {e}")
-        return jsonify({"error": str(e)}), 500
             
     except Exception as e:
         print(f"Error updating password: {e}")
