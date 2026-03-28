@@ -4,11 +4,41 @@ from openai import OpenAI
 import os
 import requests
 import uuid
+import json
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, messaging
 
 # Load environment variables
 load_dotenv()
+
+# Initialize Firebase
+firebase_initialized = False
+try:
+    firebase_cred_config = {
+        "type": "service_account",
+        "project_id": os.environ.get("FIREBASE_PROJECT_ID"),
+        "private_key_id": os.environ.get("FIREBASE_PRIVATE_KEY_ID"),
+        "private_key": os.environ.get("FIREBASE_PRIVATE_KEY"),
+        "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
+        "client_id": "111959171691144632402",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    }
+    
+    if all([os.environ.get("FIREBASE_PROJECT_ID"), 
+            os.environ.get("FIREBASE_PRIVATE_KEY"),
+            os.environ.get("FIREBASE_CLIENT_EMAIL")]):
+        firebase_cred = credentials.Certificate(firebase_cred_config)
+        firebase_admin.initialize_app(firebase_cred)
+        firebase_initialized = True
+        print("✅ Firebase initialized successfully")
+    else:
+        print("⚠️ Firebase credentials incomplete")
+except Exception as e:
+    print(f"⚠️ Firebase initialization failed: {e}")
 
 app = Flask(__name__)
 CORS(app)
@@ -22,39 +52,39 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 ADMIN_ID = os.environ.get("ADMIN_ID") # The UUID of Dr. Fizza's profile
-FCM_SERVER_KEY = os.environ.get("FCM_SERVER_KEY")
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 def send_fcm_notification(token, title, body):
-    """Send FCM notification to a device"""
-    if not FCM_SERVER_KEY or not token:
-        print("FCM not configured or no token")
+    """Send FCM notification using Firebase Admin SDK v1 API"""
+    if not firebase_initialized or not token:
+        print("FCM not configured or no token provided")
         return
     
-    url = "https://fcm.googleapis.com/fcm/send"
-    headers = {
-        "Authorization": f"key={FCM_SERVER_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "to": token,
-        "notification": {
-            "title": title,
-            "body": body,
-            "sound": "default"
-        },
-        "data": {
-            "click_action": "FLUTTER_NOTIFICATION_CLICK"
-        }
-    }
-    
     try:
-        response = requests.post(url, headers=headers, json=payload)
-        print(f"FCM Response: {response.status_code} - {response.text}")
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    sound="default",
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(sound="default"),
+                ),
+            ),
+            token=token,
+        )
+        response = messaging.send(message)
+        print(f"✅ FCM notification sent successfully. Message ID: {response}")
     except Exception as e:
-        print(f"FCM Error: {e}")
+        print(f"❌ FCM Error: {e}")
 
 @app.route('/')
 def home():
