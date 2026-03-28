@@ -1,0 +1,31 @@
+# Ignore the Flutter/Dart project folder
+skinbydrfizzag/
+
+# Ignore environment variables
+.env
+.env.local
+.env.*.local
+*.env
+.env.*
+
+# Ignore IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Ignore logs
+*.log
