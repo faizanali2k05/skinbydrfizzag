@@ -367,12 +367,13 @@ def admin_update_password():
 def chat():
     data = request.json
     user_message = data.get('message', '')
-    user_id = data.get('user_id') # Optional: for server-side persistence
+    user_id = data.get('user_id')
 
     if not openai_client or not user_message:
         return jsonify({"error": "OpenAI not configured or no message"}), 400
 
     try:
+        # 1. Get AI Response
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -385,10 +386,59 @@ def chat():
         )
         ai_message = response.choices[0].message.content
         
-        # Note: If user_id is provided, we could store it here using SUPABASE_KEY (Service Role)
-        # However, Flutter is currently handling storage. 
-        # For WhatsApp AI, we would definitely store it here.
-        
+        # 2. Persist to Supabase if user_id is provided
+        if supabase and user_id:
+            try:
+                # Find or create an 'ai_agent' conversation for this user
+                conv_res = supabase.table('conversations').select('*').eq('user_id', user_id).eq('platform', 'ai_agent').execute()
+                
+                if not conv_res.data:
+                    # Create new conversation
+                    conv_data = {
+                        "user_id": user_id,
+                        "admin_id": ADMIN_ID,
+                        "last_message": ai_message,
+                        "unread_count": 0,
+                        "platform": "ai_agent",
+                    }
+                    new_conv = supabase.table('conversations').insert(conv_data).execute()
+                    conversation_id = new_conv.data[0]['id']
+                else:
+                    conversation_id = conv_res.data[0]['id']
+                    # Update last message
+                    supabase.table('conversations').update({
+                        'last_message': ai_message,
+                        'updated_at': 'now()'
+                    }).eq('id', conversation_id).execute()
+
+                # Get user name for the message record
+                user_res = supabase.table('profiles').select('full_name').eq('id', user_id).execute()
+                user_name = user_res.data[0]['full_name'] if user_res.data else "User"
+
+                # Store User Message
+                supabase.table('messages').insert({
+                    "conversation_id": conversation_id,
+                    "sender_id": user_id,
+                    "sender_name": user_name,
+                    "sender_role": "user",
+                    "text": user_message,
+                    "platform": "ai_agent"
+                }).execute()
+
+                # Store AI Response
+                supabase.table('messages').insert({
+                    "conversation_id": conversation_id,
+                    "sender_id": str(uuid.uuid4()), # AI doesn't have a fixed sender_id in profiles
+                    "sender_name": "AI Consultant",
+                    "sender_role": "bot",
+                    "text": ai_message,
+                    "platform": "ai_agent"
+                }).execute()
+
+            except Exception as db_e:
+                print(f"Error persisting AI chat: {db_e}")
+                # Don't fail the request if DB storage fails, still return the AI response
+
         return jsonify({"response": ai_message})
     except Exception as e:
         print(f"AI Chat Error: {e}")
