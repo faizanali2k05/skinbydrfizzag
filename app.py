@@ -137,7 +137,9 @@ def process_incoming_wa_message(phone, text, wa_id):
             return
 
         # 1. Find or create user profile
-        user_res = supabase.table('profiles').select('*').eq('phone', phone).execute()
+        # Phone from WA is usually international format (e.g. 923...). We match on the last 10 digits as a fallback.
+        clean_phone = phone[-10:] if len(phone) >= 10 else phone
+        user_res = supabase.table('profiles').select('*').like('phone', f'%{clean_phone}').execute()
         
         if not user_res.data:
             print(f"Creating new profile for WA user: {phone}")
@@ -155,18 +157,22 @@ def process_incoming_wa_message(phone, text, wa_id):
         else:
             user_id = user_res.data[0]['id']
 
+        # Get admin dynamically
+        admin_req = supabase.table('profiles').select('id').eq('role', 'admin').execute()
+        actual_admin_id = admin_req.data[0]['id'] if admin_req.data else ADMIN_ID
+
         # 2. Find or create conversation
         conv_res = supabase.table('conversations').select('*').eq('user_id', user_id).eq('platform', 'whatsapp').execute()
         
         if not conv_res.data:
             print(f"Creating new WA conversation for user_id: {user_id}")
-            if not ADMIN_ID:
-                print("CRITICAL ERROR: ADMIN_ID not set in environment variables.")
+            if not actual_admin_id:
+                print("CRITICAL ERROR: Admin not found.")
                 return
 
             conv_data = {
                 "user_id": user_id,
-                "admin_id": ADMIN_ID,
+                "admin_id": actual_admin_id,
                 "last_message": text,
                 "unread_count": 1,
                 "platform": "whatsapp",
@@ -257,14 +263,17 @@ def send_message():
         if response.status_code == 200:
             wa_id = res_data.get('messages', [{}])[0].get('id')
             
+            admin_req = supabase.table('profiles').select('id').eq('role', 'admin').execute()
+            actual_admin_id = admin_req.data[0]['id'] if admin_req.data else ADMIN_ID
+
             # 2. Store in Supabase
-            if not ADMIN_ID:
+            if not actual_admin_id:
                 print("Error: ADMIN_ID missing. Cannot store message sender.")
-                return jsonify({"error": "ADMIN_ID missing on backend"}), 500
+                return jsonify({"error": "Admin missing on backend"}), 500
 
             msg_data = {
                 "conversation_id": conversation_id,
-                "sender_id": ADMIN_ID,
+                "sender_id": actual_admin_id,
                 "sender_name": "Dr. Fizza",
                 "sender_role": "admin",
                 "text": message_text,
