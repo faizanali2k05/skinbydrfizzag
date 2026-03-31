@@ -161,8 +161,8 @@ def process_incoming_wa_message(phone, text, wa_id):
         admin_req = supabase.table('profiles').select('id').eq('role', 'admin').execute()
         actual_admin_id = admin_req.data[0]['id'] if admin_req.data else ADMIN_ID
 
-        # 2. Find or create conversation
-        conv_res = supabase.table('conversations').select('*').eq('user_id', user_id).eq('platform', 'whatsapp').execute()
+        # 2. Find or create conversation (Find ANY human conversation, whether app or whatsapp)
+        conv_res = supabase.table('conversations').select('*').eq('user_id', user_id).neq('platform', 'ai_agent').order('updated_at', desc=True).limit(1).execute()
         
         if not conv_res.data:
             print(f"Creating new WA conversation for user_id: {user_id}")
@@ -181,6 +181,11 @@ def process_incoming_wa_message(phone, text, wa_id):
             conversation_id = new_conv.data[0]['id']
         else:
             conversation_id = conv_res.data[0]['id']
+            # If the user messaged via WhatsApp, upgrade the conversation to platform=whatsapp so admin replies go to WhatsApp
+            current_platform = conv_res.data[0].get('platform')
+            if current_platform != 'whatsapp':
+                supabase.table('conversations').update({'platform': 'whatsapp'}).eq('id', conversation_id).execute()
+
             # Update unread count and last_message
             current_unread = conv_res.data[0].get('unread_count', 0) or 0
             supabase.table('conversations').update({
