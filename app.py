@@ -5,6 +5,7 @@ import os
 import requests
 import uuid
 import json
+from datetime import datetime, timezone
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import firebase_admin
@@ -56,7 +57,31 @@ ADMIN_ID = os.environ.get("ADMIN_ID") # The UUID of Dr. Fizza's profile
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-def send_fcm_notification(token, title, body):
+def get_admin_profile():
+    """Return the admin profile that should own app and WhatsApp chats."""
+    if not supabase:
+        return None
+
+    if ADMIN_ID:
+        admin_by_id = supabase.table('profiles').select('*').eq('id', ADMIN_ID).limit(1).execute()
+        if admin_by_id.data:
+            return admin_by_id.data[0]
+        print(f"Warning: ADMIN_ID {ADMIN_ID} was not found in profiles.")
+
+    admin_profiles = (
+        supabase.table('profiles')
+        .select('*')
+        .eq('role', 'admin')
+        .order('created_at', desc=False)
+        .limit(1)
+        .execute()
+    )
+    if admin_profiles.data:
+        return admin_profiles.data[0]
+
+    return None
+
+def send_fcm_notification(token, title, body, data=None):
     """Send FCM notification using Firebase Admin SDK v1 API"""
     if not firebase_initialized or not token:
         print("FCM not configured or no token provided")
@@ -79,12 +104,26 @@ def send_fcm_notification(token, title, body):
                     aps=messaging.Aps(sound="default"),
                 ),
             ),
+            data={k: str(v) for k, v in (data or {}).items() if v is not None},
             token=token,
         )
         response = messaging.send(message)
         print(f"✅ FCM notification sent successfully. Message ID: {response}")
     except Exception as e:
         print(f"❌ FCM Error: {e}")
+
+def upsert_profile_fcm_token(profile_id, fcm_token):
+    """Persist the current device token for a profile."""
+    if not supabase:
+        raise ValueError("Supabase client not initialized.")
+
+    if not profile_id:
+        raise ValueError("profile_id is required.")
+
+    supabase.table('profiles').update({
+        'fcm_token': fcm_token,
+        'updated_at': datetime.now(timezone.utc).isoformat()
+    }).eq('id', profile_id).execute()
 
 @app.route('/')
 def home():
@@ -157,9 +196,8 @@ def process_incoming_wa_message(phone, text, wa_id):
         else:
             user_id = user_res.data[0]['id']
 
-        # Get admin dynamically
-        admin_req = supabase.table('profiles').select('id').eq('role', 'admin').execute()
-        actual_admin_id = admin_req.data[0]['id'] if admin_req.data else ADMIN_ID
+        admin_profile = get_admin_profile()
+        actual_admin_id = admin_profile['id'] if admin_profile else None
 
         # 2. Find or create conversation (Find ANY human conversation, whether app or whatsapp)
         conv_res = supabase.table('conversations').select('*').eq('user_id', user_id).neq('platform', 'ai_agent').order('updated_at', desc=True).limit(1).execute()
@@ -173,26 +211,19 @@ def process_incoming_wa_message(phone, text, wa_id):
             conv_data = {
                 "user_id": user_id,
                 "admin_id": actual_admin_id,
-                "last_message": text,
-                "unread_count": 1,
                 "platform": "whatsapp",
             }
             new_conv = supabase.table('conversations').insert(conv_data).execute()
             conversation_id = new_conv.data[0]['id']
         else:
             conversation_id = conv_res.data[0]['id']
-            # If the user messaged via WhatsApp, upgrade the conversation to platform=whatsapp so admin replies go to WhatsApp
-            current_platform = conv_res.data[0].get('platform')
-            if current_platform != 'whatsapp':
-                supabase.table('conversations').update({'platform': 'whatsapp'}).eq('id', conversation_id).execute()
-
-            # Update unread count and last_message
-            current_unread = conv_res.data[0].get('unread_count', 0) or 0
-            supabase.table('conversations').update({
-                'last_message': text,
-                'unread_count': current_unread + 1,
-                'updated_at': 'now()'
-            }).eq('id', conversation_id).execute()
+            conversation_updates = {
+                'platform': 'whatsapp',
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }
+            if actual_admin_id and conv_res.data[0].get('admin_id') != actual_admin_id:
+                conversation_updates['admin_id'] = actual_admin_id
+            supabase.table('conversations').update(conversation_updates).eq('id', conversation_id).execute()
 
         # 3. Store message
         print(f"Storing WA message in DB. Conversation: {conversation_id}")
@@ -210,19 +241,40 @@ def process_incoming_wa_message(phone, text, wa_id):
         print("Message stored successfully.")
         
         # 4. Send FCM notification to admin
-        if ADMIN_ID:
-            admin_profile = supabase.table('profiles').select('fcm_token').eq('id', ADMIN_ID).execute()
-            if admin_profile.data and admin_profile.data[0].get('fcm_token'):
-                send_fcm_notification(
-                    admin_profile.data[0]['fcm_token'],
-                    f"New message from {sender_name}",
-                    text[:100] + "..." if len(text) > 100 else text
-                )
+        if admin_profile and admin_profile.get('fcm_token'):
+            send_fcm_notification(
+                admin_profile['fcm_token'],
+                f"New message from {sender_name}",
+                text[:100] + "..." if len(text) > 100 else text,
+                {
+                    "type": "chat_message",
+                    "conversation_id": conversation_id,
+                    "sender_id": user_id,
+                    "platform": "whatsapp",
+                }
+            )
         
     except Exception as e:
         print(f"Error processing WA message: {e}")
 
 # --- ADMIN API (Used by Flutter) ---
+
+@app.route('/register-fcm-token', methods=['POST'])
+def register_fcm_token():
+    """Save or update the latest FCM token for a profile."""
+    data = request.json or {}
+    profile_id = data.get('profile_id') or data.get('user_id')
+    fcm_token = data.get('fcm_token')
+
+    if not profile_id:
+        return jsonify({"error": "profile_id is required"}), 400
+
+    try:
+        upsert_profile_fcm_token(profile_id, fcm_token)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        print(f"Error registering FCM token: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/send-message', methods=['POST'])
 def send_message():
@@ -268,18 +320,24 @@ def send_message():
         if response.status_code == 200:
             wa_id = res_data.get('messages', [{}])[0].get('id')
             
-            admin_req = supabase.table('profiles').select('id').eq('role', 'admin').execute()
-            actual_admin_id = admin_req.data[0]['id'] if admin_req.data else ADMIN_ID
+            admin_profile = get_admin_profile()
+            actual_admin_id = admin_profile['id'] if admin_profile else None
 
             # 2. Store in Supabase
             if not actual_admin_id:
                 print("Error: ADMIN_ID missing. Cannot store message sender.")
                 return jsonify({"error": "Admin missing on backend"}), 500
 
+            supabase.table('conversations').update({
+                'admin_id': actual_admin_id,
+                'platform': 'whatsapp',
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }).eq('id', conversation_id).execute()
+
             msg_data = {
                 "conversation_id": conversation_id,
                 "sender_id": actual_admin_id,
-                "sender_name": "Dr. Fizza",
+                "sender_name": admin_profile.get('full_name', 'Admin') if admin_profile else "Admin",
                 "sender_role": "admin",
                 "text": message_text,
                 "platform": "whatsapp",
@@ -294,7 +352,13 @@ def send_message():
                 send_fcm_notification(
                     user_profile.data[0]['fcm_token'],
                     "New message from Dr. Fizza",
-                    message_text[:100] + "..." if len(message_text) > 100 else message_text
+                    message_text[:100] + "..." if len(message_text) > 100 else message_text,
+                    {
+                        "type": "chat_message",
+                        "conversation_id": conversation_id,
+                        "sender_id": actual_admin_id,
+                        "platform": "whatsapp",
+                    }
                 )
             
             return jsonify({"status": "success", "wa_id": wa_id})
