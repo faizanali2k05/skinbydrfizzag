@@ -5,7 +5,9 @@ import os
 import requests
 import uuid
 import json
+import mimetypes
 from datetime import datetime, timezone
+from urllib.parse import quote
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import firebase_admin
@@ -56,6 +58,152 @@ ADMIN_ID = os.environ.get("ADMIN_ID") # The UUID of Dr. Fizza's profile
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+
+def normalize_message_type(message_type):
+    """Map external/platform message types to app-supported message types."""
+    normalized = (message_type or 'text').lower()
+    if normalized in {'image', 'sticker'}:
+        return 'image'
+    if normalized in {'audio', 'voice'}:
+        return 'audio'
+    if normalized in {'document', 'video'}:
+        return 'file'
+    return 'text'
+
+
+def default_message_text(message_type):
+    """Fallback preview text for non-text messages."""
+    normalized = normalize_message_type(message_type)
+    if normalized == 'image':
+        return 'Image'
+    if normalized == 'audio':
+        return 'Voice message'
+    if message_type == 'video':
+        return 'Video'
+    return 'Attachment'
+
+
+def upload_bytes_to_supabase_storage(bucket, object_path, file_bytes, content_type='application/octet-stream'):
+    """Upload raw bytes to a public Supabase storage bucket and return its public URL."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ValueError("Supabase storage is not configured.")
+
+    encoded_path = quote(object_path, safe='/')
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{encoded_path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_KEY,
+        "Content-Type": content_type or "application/octet-stream",
+        "x-upsert": "true",
+    }
+    response = requests.post(upload_url, headers=headers, data=file_bytes, timeout=60)
+    if response.status_code not in (200, 201):
+        raise ValueError(f"Supabase storage upload failed: {response.status_code} {response.text}")
+
+    return f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{encoded_path}"
+
+
+def download_whatsapp_media(media_id):
+    """Download media bytes from WhatsApp Cloud API."""
+    if not WHATSAPP_TOKEN:
+        raise ValueError("WHATSAPP_TOKEN is not configured.")
+
+    metadata_response = requests.get(
+        f"https://graph.facebook.com/v19.0/{media_id}",
+        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+        timeout=30,
+    )
+    metadata_response.raise_for_status()
+    metadata = metadata_response.json()
+
+    media_url = metadata.get('url')
+    if not media_url:
+        raise ValueError("WhatsApp media URL missing from metadata response.")
+
+    media_response = requests.get(
+        media_url,
+        headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+        timeout=60,
+    )
+    media_response.raise_for_status()
+
+    return {
+        "bytes": media_response.content,
+        "mime_type": metadata.get('mime_type') or media_response.headers.get('Content-Type'),
+        "sha256": metadata.get('sha256'),
+    }
+
+
+def store_whatsapp_media(phone, conversation_id, wa_id, raw_type, media_payload):
+    """Download incoming WhatsApp media and upload it to Supabase storage."""
+    media_id = media_payload.get('id')
+    if not media_id:
+        return None
+
+    media_details = download_whatsapp_media(media_id)
+    mime_type = media_payload.get('mime_type') or media_details.get('mime_type')
+    suggested_filename = media_payload.get('filename')
+    extension = mimetypes.guess_extension(mime_type or '') or ''
+    if raw_type == 'audio' and extension == '.mp4':
+        extension = '.m4a'
+    if not suggested_filename:
+        suggested_filename = f"{raw_type}_{wa_id or uuid.uuid4().hex}{extension}"
+
+    safe_filename = suggested_filename.replace('\\', '_').replace('/', '_').replace(' ', '_')
+    object_path = f"whatsapp/{phone}/{conversation_id}/{safe_filename}"
+
+    return upload_bytes_to_supabase_storage(
+        'chat_files',
+        object_path,
+        media_details['bytes'],
+        mime_type or 'application/octet-stream',
+    )
+
+
+def build_whatsapp_payload(recipient_phone, message_text='', message_type='text', file_url=None, file_name=None):
+    """Build a WhatsApp Cloud API payload for text or media."""
+    normalized = normalize_message_type(message_type)
+    text = (message_text or '').strip()
+
+    if file_url and normalized == 'image':
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone,
+            "type": "image",
+            "image": {"link": file_url},
+        }
+        if text:
+            payload["image"]["caption"] = text
+        return payload
+
+    if file_url and normalized == 'audio':
+        return {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone,
+            "type": "audio",
+            "audio": {"link": file_url},
+        }
+
+    if file_url and normalized == 'file':
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone,
+            "type": "document",
+            "document": {"link": file_url},
+        }
+        if file_name:
+            payload["document"]["filename"] = file_name
+        if text:
+            payload["document"]["caption"] = text
+        return payload
+
+    return {
+        "messaging_product": "whatsapp",
+        "to": recipient_phone,
+        "type": "text",
+        "text": {"body": text},
+    }
 
 def get_admin_profile():
     """Return the admin profile that should own app and WhatsApp chats."""
@@ -156,24 +304,29 @@ def handle_webhook():
                 if 'messages' in value:
                     for message in value['messages']:
                         sender_phone = message.get('from')
-                        # Get text body or default to empty string
-                        message_body = message.get('text', {}).get('body', '')
                         wa_message_id = message.get('id')
+                        message_type = message.get('type', 'text')
                         
-                        print(f"Processing message from {sender_phone}: {message_body}")
-                        if message_body:
-                            process_incoming_wa_message(sender_phone, message_body, wa_message_id)
+                        print(f"Processing {message_type} message from {sender_phone} (wa_id={wa_message_id})")
+                        process_incoming_wa_message(sender_phone, message)
         
         return jsonify({"status": "received"}), 200
     
     return jsonify({"error": "Invalid object"}), 400
 
-def process_incoming_wa_message(phone, text, wa_id):
+def process_incoming_wa_message(phone, message):
     """Business logic for incoming WhatsApp messages"""
     try:
         if not supabase:
             print("Error: Supabase client not initialized.")
             return
+
+        text = message.get('text', {}).get('body', '').strip()
+        wa_id = message.get('id')
+        raw_type = message.get('type', 'text')
+        normalized_type = normalize_message_type(raw_type)
+        media_payload = message.get(raw_type, {}) if raw_type != 'text' else {}
+        caption = media_payload.get('caption', '').strip() if isinstance(media_payload, dict) else ''
 
         # 1. Find or create user profile
         # Phone from WA is usually international format (e.g. 923...). We match on the last 10 digits as a fallback.
@@ -228,12 +381,22 @@ def process_incoming_wa_message(phone, text, wa_id):
         # 3. Store message
         print(f"Storing WA message in DB. Conversation: {conversation_id}")
         sender_name = user_res.data[0].get('full_name', f'WA User {phone}') if user_res.data else f'WA User {phone}'
+        file_url = None
+        if raw_type != 'text':
+            try:
+                file_url = store_whatsapp_media(phone, conversation_id, wa_id, raw_type, media_payload)
+            except Exception as media_error:
+                print(f"Failed to store WhatsApp media {wa_id}: {media_error}")
+
+        stored_text = text or caption or default_message_text(raw_type)
         msg_data = {
             "conversation_id": conversation_id,
             "sender_id": user_id,
             "sender_name": sender_name,
             "sender_role": "user",
-            "text": text,
+            "text": stored_text,
+            "message_type": normalized_type,
+            "file_url": file_url,
             "platform": "whatsapp",
             "whatsapp_message_id": wa_id
         }
@@ -245,7 +408,7 @@ def process_incoming_wa_message(phone, text, wa_id):
             send_fcm_notification(
                 admin_profile['fcm_token'],
                 f"New message from {sender_name}",
-                text[:100] + "..." if len(text) > 100 else text,
+                stored_text[:100] + "..." if len(stored_text) > 100 else stored_text,
                 {
                     "type": "chat_message",
                     "conversation_id": conversation_id,
@@ -283,10 +446,13 @@ def send_message():
     print(f"Admin Send-Message Request: {data}")
     
     conversation_id = data.get('conversation_id')
-    message_text = data.get('message')
+    message_text = data.get('message', '')
     recipient_phone = data.get('phone')
+    message_type = normalize_message_type(data.get('message_type', 'text'))
+    file_url = data.get('file_url')
+    file_name = data.get('file_name')
     
-    if not all([conversation_id, message_text, recipient_phone]):
+    if not conversation_id or not recipient_phone or (not message_text and not file_url):
         return jsonify({"error": "Missing parameters"}), 400
 
     try:
@@ -305,12 +471,13 @@ def send_message():
             "Authorization": f"Bearer {WHATSAPP_TOKEN}",
             "Content-Type": "application/json"
         }
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": recipient_phone,
-            "type": "text",
-            "text": {"body": message_text}
-        }
+        payload = build_whatsapp_payload(
+            recipient_phone=recipient_phone,
+            message_text=message_text,
+            message_type=message_type,
+            file_url=file_url,
+            file_name=file_name,
+        )
         
         print(f"Sending to Meta API: {url}")
         response = requests.post(url, headers=headers, json=payload)
@@ -339,7 +506,9 @@ def send_message():
                 "sender_id": actual_admin_id,
                 "sender_name": admin_profile.get('full_name', 'Admin') if admin_profile else "Admin",
                 "sender_role": "admin",
-                "text": message_text,
+                "text": message_text or default_message_text(message_type),
+                "message_type": message_type,
+                "file_url": file_url,
                 "platform": "whatsapp",
                 "whatsapp_message_id": wa_id
             }
@@ -352,7 +521,7 @@ def send_message():
                 send_fcm_notification(
                     user_profile.data[0]['fcm_token'],
                     "New message from Dr. Fizza",
-                    message_text[:100] + "..." if len(message_text) > 100 else message_text,
+                    (message_text or default_message_text(message_type))[:100] + "..." if len(message_text or default_message_text(message_type)) > 100 else (message_text or default_message_text(message_type)),
                     {
                         "type": "chat_message",
                         "conversation_id": conversation_id,
