@@ -329,17 +329,32 @@ def process_incoming_wa_message(phone, message):
         caption = media_payload.get('caption', '').strip() if isinstance(media_payload, dict) else ''
 
         # 1. Find or create user profile
-        # Phone from WA is usually international format (e.g. 923...). We match on the last 10 digits as a fallback.
-        clean_phone = phone[-10:] if len(phone) >= 10 else phone
-        user_res = supabase.table('profiles').select('*').like('phone', f'%{clean_phone}').execute()
-        
+        # WhatsApp phones come in international format (e.g. 923001234567). Match
+        # by exact phone first, then fall back to a suffix match of the last 10
+        # digits with the wildcard ONLY on the leading side, so e.g. 1234567890
+        # does not match 21234567890. Anchored "%suffix" gives at most one false
+        # positive when two profiles share the same trailing digits.
+        clean_phone = ''.join(ch for ch in phone if ch.isdigit())
+        suffix = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
+
+        user_res = supabase.table('profiles').select('*').eq('phone', phone).execute()
+        if not user_res.data and suffix:
+            user_res = (
+                supabase.table('profiles')
+                .select('*')
+                .like('phone', f'%{suffix}')
+                .execute()
+            )
+
+        new_profile_full_name = None
         if not user_res.data:
             print(f"Creating new profile for WA user: {phone}")
             # Create a new profile for the WhatsApp user
             new_user_id = str(uuid.uuid4())
+            new_profile_full_name = f"WA User {phone}"
             new_user = {
                 "id": new_user_id,
-                "full_name": f"WA User {phone}",
+                "full_name": new_profile_full_name,
                 "phone": phone,
                 "role": "user",
                 "status": "active"
@@ -380,7 +395,10 @@ def process_incoming_wa_message(phone, message):
 
         # 3. Store message
         print(f"Storing WA message in DB. Conversation: {conversation_id}")
-        sender_name = user_res.data[0].get('full_name', f'WA User {phone}') if user_res.data else f'WA User {phone}'
+        if user_res.data:
+            sender_name = user_res.data[0].get('full_name') or f'WA User {phone}'
+        else:
+            sender_name = new_profile_full_name or f'WA User {phone}'
         file_url = None
         if raw_type != 'text':
             try:
@@ -632,59 +650,13 @@ def chat():
             ],
         )
         ai_message = response.choices[0].message.content
-        
-        # 2. Persist to Supabase if user_id is provided
-        if supabase and user_id:
-            try:
-                # Find or create an 'ai_agent' conversation for this user
-                conv_res = supabase.table('conversations').select('*').eq('user_id', user_id).eq('platform', 'ai_agent').execute()
-                
-                if not conv_res.data:
-                    # Create new conversation
-                    conv_data = {
-                        "user_id": user_id,
-                        "admin_id": ADMIN_ID,
-                        "last_message": ai_message,
-                        "unread_count": 0,
-                        "platform": "ai_agent",
-                    }
-                    new_conv = supabase.table('conversations').insert(conv_data).execute()
-                    conversation_id = new_conv.data[0]['id']
-                else:
-                    conversation_id = conv_res.data[0]['id']
-                    # Update last message
-                    supabase.table('conversations').update({
-                        'last_message': ai_message,
-                        'updated_at': 'now()'
-                    }).eq('id', conversation_id).execute()
 
-                # Get user name for the message record
-                user_res = supabase.table('profiles').select('full_name').eq('id', user_id).execute()
-                user_name = user_res.data[0]['full_name'] if user_res.data else "User"
-
-                # Store User Message
-                supabase.table('messages').insert({
-                    "conversation_id": conversation_id,
-                    "sender_id": user_id,
-                    "sender_name": user_name,
-                    "sender_role": "user",
-                    "text": user_message,
-                    "platform": "ai_agent"
-                }).execute()
-
-                # Store AI Response
-                supabase.table('messages').insert({
-                    "conversation_id": conversation_id,
-                    "sender_id": str(uuid.uuid4()), # AI doesn't have a fixed sender_id in profiles
-                    "sender_name": "AI Consultant",
-                    "sender_role": "bot",
-                    "text": ai_message,
-                    "platform": "ai_agent"
-                }).execute()
-
-            except Exception as db_e:
-                print(f"Error persisting AI chat: {db_e}")
-                # Don't fail the request if DB storage fails, still return the AI response
+        # Persistence note: the Flutter client persists AI conversations to the
+        # dedicated `ai_conversations` / `ai_messages` tables. We intentionally
+        # do NOT write to the `messages` table here because:
+        #   1. `messages.sender_id` has a NOT NULL FK to `profiles.id`, so the
+        #      AI cannot be a valid sender without a real profile row.
+        #   2. Duplicating into `messages` would double-store every AI turn.
 
         return jsonify({"response": ai_message})
     except Exception as e:

@@ -29,3 +29,6 @@ __pycache__/
 
 # Ignore logs
 *.log
+
+# Ignore PRD (kept locally, not committed)
+prd.md
