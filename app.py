@@ -723,18 +723,28 @@ def chat():
     data = request.json
     user_message = data.get('message', '')
     user_id = data.get('user_id')
+    user_name = (data.get('user_name') or '').strip()
 
     if not openai_client or not user_message:
         return jsonify({"error": "OpenAI not configured or no message"}), 400
 
     try:
         # 1. Get AI Response
+        identity_context = (
+            f"The current patient's registered name is {user_name}."
+            if user_name
+            else "The current patient is signed in, but no display name was provided."
+        )
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful AI skin care consultant for 'Skin By Dr. Fizza G' clinic. Keep responses helpful and concise.",
+                    "content": (
+                        "You are a helpful AI skin care consultant for "
+                        "'Skin By Dr. Fizza G' clinic. Keep responses helpful "
+                        f"and concise. {identity_context}"
+                    ),
                 },
                 {"role": "user", "content": user_message},
             ],
