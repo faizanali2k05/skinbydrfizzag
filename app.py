@@ -557,6 +557,96 @@ def send_message():
         print(f"Backend send_message exception: {e}")
         return jsonify({"error": str(e)}), 500
 
+# --- ADMIN CREATE USER ROUTE ---
+
+@app.route('/admin/create-user', methods=['POST'])
+def admin_create_user():
+    """Admin endpoint to create a new auth user without disturbing the admin's session.
+
+    The Flutter client uses this instead of supabase.auth.signUp() when an admin
+    is creating/registering a user, because signUp would replace the admin's
+    current session with the new user's session and break subsequent admin
+    operations (e.g. updating that user's password right after).
+    """
+    data = request.json or {}
+    email = (data.get('email') or '').strip()
+    password = data.get('password') or ''
+    full_name = (data.get('full_name') or '').strip()
+    phone = (data.get('phone') or '').strip()
+    existing_profile_id = data.get('existing_profile_id')
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+    if len(password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters long"}), 400
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return jsonify({"error": "Supabase is not configured"}), 500
+
+    try:
+        clean_phone = ''.join(ch for ch in phone if ch.isdigit())
+
+        url = f"{SUPABASE_URL}/auth/v1/admin/users"
+        headers = {
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "apikey": SUPABASE_ANON_KEY or SUPABASE_KEY,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_metadata": {
+                "full_name": full_name,
+                "phone": clean_phone,
+            },
+        }
+
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code not in (200, 201):
+            try:
+                error_data = response.json()
+                msg = error_data.get('msg') or error_data.get('message') or response.text
+            except Exception:
+                msg = response.text
+            print(f"admin_create_user error {response.status_code}: {msg}")
+            return jsonify({"error": msg}), response.status_code
+
+        new_user = response.json() or {}
+        new_user_id = new_user.get('id') or new_user.get('user', {}).get('id')
+
+        if supabase and new_user_id:
+            # If a WhatsApp-only profile already exists for this person, fold
+            # the WhatsApp conversations onto the new authenticated profile and
+            # remove the orphan profile so there are no duplicates.
+            if existing_profile_id and existing_profile_id != new_user_id:
+                try:
+                    supabase.table('conversations').update({
+                        'user_id': new_user_id
+                    }).eq('user_id', existing_profile_id).execute()
+                    supabase.table('messages').update({
+                        'sender_id': new_user_id
+                    }).eq('sender_id', existing_profile_id).execute()
+                    supabase.table('profiles').delete().eq('id', existing_profile_id).execute()
+                except Exception as merge_err:
+                    print(f"admin_create_user merge warning: {merge_err}")
+
+            # Make sure the profile row carries the latest details. The
+            # handle_new_user trigger should have created the row already.
+            try:
+                supabase.table('profiles').update({
+                    'full_name': full_name or None,
+                    'email': email,
+                    'phone': clean_phone or None,
+                }).eq('id', new_user_id).execute()
+            except Exception as profile_err:
+                print(f"admin_create_user profile update warning: {profile_err}")
+
+        return jsonify({"status": "success", "user_id": new_user_id})
+    except Exception as e:
+        print(f"admin_create_user exception: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # --- ADMIN PASSWORD UPDATE ROUTE ---
 
 @app.route('/admin/update-password', methods=['POST'])
