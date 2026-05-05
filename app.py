@@ -725,8 +725,50 @@ def chat():
     user_id = data.get('user_id')
     user_name = (data.get('user_name') or '').strip()
 
-    if not openai_client or not user_message:
-        return jsonify({"error": "OpenAI not configured or no message"}), 400
+
+def _get_hardcoded_agent_response(message: str):
+    """Return a hard-coded response when the user's message requests basic business/contact info."""
+    if not message:
+        return None
+    m = message.lower()
+    triggers = [
+        'skin by dr fizza', 'dr fizza', 'contact', 'phone', '+923', '+971',
+        'instagram', 'facebook', 'linkedin', 'quick links', 'home', 'about us',
+        'services', 'shop', 'contact us', 'locations', 'islamabad', 'lahore',
+        'karachi', 'al wasl', 'jumeirah', 'hours', 'mon - fri', 'sat - sun', 'helpful links'
+    ]
+    for t in triggers:
+        if t in m:
+            return (
+                "Skin by Dr Fizza offers personalized skincare treatments that enhance your natural beauty for a radiant glow.\n\n"
+                "Pakistan: +923 21 283 1844\n"
+                "UAE: +971 56 100 6767\n\n"
+                "Social: Instagram, Facebook, Linkedin\n\n"
+                "Quick links:\n"
+                "- Home\n"
+                "- About Us\n"
+                "- Services\n"
+                "- Shop\n"
+                "- Contact Us\n\n"
+                "Locations:\n"
+                "- Islamabad, Pak\n"
+                "- Lahore, Pak\n"
+                "- Karachi, Pak\n"
+                "- Al Wasl Jumeirah, UAE\n\n"
+                "Hours:\n"
+                "Mon - Fri: Flexible Hours\n"
+                "Sat - Sun: Flexible Hours"
+            )
+    return None
+
+
+    if not user_message:
+        return jsonify({"error": "No message provided"}), 400
+
+    # Check for our hard-coded informational responses first (doesn't require OpenAI)
+    hard_resp = _get_hardcoded_agent_response(user_message)
+    if hard_resp:
+        return jsonify({"response": hard_resp})
 
     try:
         # 1. Get AI Response
