@@ -49,9 +49,9 @@ flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
   image_path: "lib/assets/icon.png"
-  # Android adaptive icon: soft blush background + brand wordmark foreground
-  # (kept inside the safe zone so the system mask never clips it).
-  adaptive_icon_background: "#FBF1EE"
+  # Android adaptive icon: brand-gold background + wordmark foreground (kept
+  # inside the safe zone so the system mask never clips it).
+  adaptive_icon_background: "#C9A24B"
   adaptive_icon_foreground: "lib/assets/icon_foreground.png"
   remove_alpha_ios: true
   min_sdk_android: 21
