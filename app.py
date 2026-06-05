@@ -2,10 +2,14 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
 import os
+import hmac
+import hashlib
+import logging
 import requests
 import uuid
 import json
 import mimetypes
+from functools import wraps
 from datetime import datetime, timezone
 from urllib.parse import quote
 from supabase import create_client, Client
@@ -16,7 +20,11 @@ from firebase_admin import credentials, messaging
 # Load environment variables
 load_dotenv()
 
-# Initialize Firebase
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("skinbydrfizzag")
+
+# Initialize Firebase (idempotent — initialize_app raises if the default app
+# already exists, e.g. under gunicorn --preload or the dev reloader).
 firebase_initialized = False
 try:
     firebase_cred_config = {
@@ -25,26 +33,38 @@ try:
         "private_key_id": os.environ.get("FIREBASE_PRIVATE_KEY_ID"),
         "private_key": os.environ.get("FIREBASE_PRIVATE_KEY").replace('\\n', '\n') if os.environ.get("FIREBASE_PRIVATE_KEY") else None,
         "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
-        "client_id": "111959171691144632402",
+        "client_id": os.environ.get("FIREBASE_CLIENT_ID", "111959171691144632402"),
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
         "token_uri": "https://oauth2.googleapis.com/token",
         "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
     }
-    
-    if all([os.environ.get("FIREBASE_PROJECT_ID"), 
-            os.environ.get("FIREBASE_PRIVATE_KEY"),
-            os.environ.get("FIREBASE_CLIENT_EMAIL")]):
+
+    if firebase_admin._apps:
+        firebase_initialized = True
+    elif all([os.environ.get("FIREBASE_PROJECT_ID"),
+              os.environ.get("FIREBASE_PRIVATE_KEY"),
+              os.environ.get("FIREBASE_CLIENT_EMAIL")]):
         firebase_cred = credentials.Certificate(firebase_cred_config)
         firebase_admin.initialize_app(firebase_cred)
         firebase_initialized = True
-        print("✅ Firebase initialized successfully")
+        logger.info("Firebase initialized successfully")
     else:
-        print("⚠️ Firebase credentials incomplete")
+        logger.warning("Firebase credentials incomplete")
 except Exception as e:
-    print(f"⚠️ Firebase initialization failed: {e}")
+    logger.warning(f"Firebase initialization failed: {e}")
 
 app = Flask(__name__)
-CORS(app)
+
+# Restrict CORS to the routes the app/browser actually call. The mobile app
+# is not bound by CORS, so a narrow allow-list here only tightens browser access
+# without breaking the Flutter client. Override with the ALLOWED_ORIGINS env var
+# (comma-separated) when serving a web build.
+_allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+CORS(app, origins=_allowed_origins or "*")
+
+# Shared HTTP session with connection pooling for all outbound calls.
+http_session = requests.Session()
+DEFAULT_TIMEOUT = 30
 
 # Initialize Clients
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -53,11 +73,57 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") # Use Service Role Ke
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") # Anon key for API calls
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_APP_SECRET = os.environ.get("WHATSAPP_APP_SECRET")  # Meta app secret for webhook signature verification
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
 ADMIN_ID = os.environ.get("ADMIN_ID") # The UUID of Dr. Fizza's profile
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+
+# ==================== Auth helpers ====================
+
+def _extract_admin_token():
+    """Read the admin/access token from the Authorization header or JSON body."""
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        return auth_header[7:].strip()
+    body = request.get_json(silent=True) or {}
+    return body.get('admin_token')
+
+
+def verify_admin():
+    """Validate the caller's Supabase JWT and confirm they are an admin.
+
+    Returns the admin profile dict on success, or None if the token is
+    missing/invalid or the user is not an admin.
+    """
+    token = _extract_admin_token()
+    if not token or not supabase:
+        return None
+    try:
+        user_resp = supabase.auth.get_user(token)
+        user = getattr(user_resp, 'user', None)
+        if user is None:
+            return None
+        prof = supabase.table('profiles').select('*').eq('id', user.id).limit(1).execute()
+        if prof.data and prof.data[0].get('role') == 'admin':
+            return prof.data[0]
+    except Exception as e:
+        logger.warning(f"Admin token verification failed: {e}")
+    return None
+
+
+def admin_required(view):
+    """Decorator that rejects requests lacking a valid admin token."""
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        admin_profile = verify_admin()
+        if not admin_profile:
+            return jsonify({"error": "Unauthorized"}), 401
+        request.admin_profile = admin_profile
+        return view(*args, **kwargs)
+    return wrapper
 
 
 def normalize_message_type(message_type):
@@ -97,7 +163,7 @@ def upload_bytes_to_supabase_storage(bucket, object_path, file_bytes, content_ty
         "Content-Type": content_type or "application/octet-stream",
         "x-upsert": "true",
     }
-    response = requests.post(upload_url, headers=headers, data=file_bytes, timeout=60)
+    response = http_session.post(upload_url, headers=headers, data=file_bytes, timeout=60)
     if response.status_code not in (200, 201):
         raise ValueError(f"Supabase storage upload failed: {response.status_code} {response.text}")
 
@@ -109,7 +175,7 @@ def download_whatsapp_media(media_id):
     if not WHATSAPP_TOKEN:
         raise ValueError("WHATSAPP_TOKEN is not configured.")
 
-    metadata_response = requests.get(
+    metadata_response = http_session.get(
         f"https://graph.facebook.com/v19.0/{media_id}",
         headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
         timeout=30,
@@ -121,7 +187,7 @@ def download_whatsapp_media(media_id):
     if not media_url:
         raise ValueError("WhatsApp media URL missing from metadata response.")
 
-    media_response = requests.get(
+    media_response = http_session.get(
         media_url,
         headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
         timeout=60,
@@ -290,12 +356,53 @@ def verify_webhook():
         return challenge, 200
     return "Verification failed", 403
 
+def _verify_webhook_signature(raw_body):
+    """Verify Meta's X-Hub-Signature-256 HMAC over the raw request body.
+
+    Returns True when the signature is valid. If WHATSAPP_APP_SECRET is not
+    configured the check is skipped (logged as a warning) so existing
+    deployments keep working until the secret is provisioned.
+    """
+    if not WHATSAPP_APP_SECRET:
+        logger.warning("WHATSAPP_APP_SECRET not set — skipping webhook signature verification")
+        return True
+    signature = request.headers.get('X-Hub-Signature-256', '')
+    if not signature.startswith('sha256='):
+        return False
+    expected = hmac.new(
+        WHATSAPP_APP_SECRET.encode('utf-8'), raw_body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature[len('sha256='):])
+
+
+def _whatsapp_message_already_stored(wa_id):
+    """Return True if a message with this WhatsApp id is already persisted."""
+    if not wa_id or not supabase:
+        return False
+    try:
+        existing = (
+            supabase.table('messages')
+            .select('id')
+            .eq('whatsapp_message_id', wa_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(existing.data)
+    except Exception as e:
+        logger.warning(f"Dedup lookup failed for {wa_id}: {e}")
+        return False
+
+
 @app.route('/webhook', methods=['POST'])
 def handle_webhook():
     """Handle incoming WhatsApp messages"""
-    data = request.json
-    print(f"Incoming Webhook Data: {data}")
-    
+    raw_body = request.get_data()
+    if not _verify_webhook_signature(raw_body):
+        logger.warning("Rejected webhook with invalid signature")
+        return jsonify({"error": "Invalid signature"}), 403
+
+    data = request.get_json(silent=True) or {}
+
     # Check if it's a message event
     if data.get('object') == 'whatsapp_business_account':
         for entry in data.get('entry', []):
@@ -306,12 +413,18 @@ def handle_webhook():
                         sender_phone = message.get('from')
                         wa_message_id = message.get('id')
                         message_type = message.get('type', 'text')
-                        
-                        print(f"Processing {message_type} message from {sender_phone} (wa_id={wa_message_id})")
+
+                        # Meta retries deliveries until it receives a 200, which
+                        # can replay the same message — skip ones we already stored.
+                        if _whatsapp_message_already_stored(wa_message_id):
+                            logger.info(f"Skipping duplicate WhatsApp message {wa_message_id}")
+                            continue
+
+                        logger.info(f"Processing {message_type} message (wa_id={wa_message_id})")
                         process_incoming_wa_message(sender_phone, message)
-        
+
         return jsonify({"status": "received"}), 200
-    
+
     return jsonify({"error": "Invalid object"}), 400
 
 def process_incoming_wa_message(phone, message):
@@ -458,11 +571,11 @@ def register_fcm_token():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/send-message', methods=['POST'])
+@admin_required
 def send_message():
     """Endpoint for Admin to send a message to WhatsApp"""
-    data = request.json
-    print(f"Admin Send-Message Request: {data}")
-    
+    data = request.get_json(silent=True) or {}
+
     conversation_id = data.get('conversation_id')
     message_text = data.get('message', '')
     recipient_phone = data.get('phone')
@@ -497,10 +610,8 @@ def send_message():
             file_name=file_name,
         )
         
-        print(f"Sending to Meta API: {url}")
-        response = requests.post(url, headers=headers, json=payload)
+        response = http_session.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
         res_data = response.json()
-        print(f"Meta API Response: {res_data}")
         
         if response.status_code == 200:
             wa_id = res_data.get('messages', [{}])[0].get('id')
@@ -560,6 +671,7 @@ def send_message():
 # --- ADMIN CREATE USER ROUTE ---
 
 @app.route('/admin/create-user', methods=['POST'])
+@admin_required
 def admin_create_user():
     """Admin endpoint to create a new auth user without disturbing the admin's session.
 
@@ -568,7 +680,7 @@ def admin_create_user():
     current session with the new user's session and break subsequent admin
     operations (e.g. updating that user's password right after).
     """
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip()
     password = data.get('password') or ''
     full_name = (data.get('full_name') or '').strip()
@@ -602,7 +714,7 @@ def admin_create_user():
             },
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = http_session.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code not in (200, 201):
             try:
                 error_data = response.json()
@@ -650,81 +762,53 @@ def admin_create_user():
 # --- ADMIN PASSWORD UPDATE ROUTE ---
 
 @app.route('/admin/update-password', methods=['POST'])
+@admin_required
 def admin_update_password():
-    """Admin endpoint to update a user's password"""
-    data = request.json
+    """Admin endpoint to update a user's password.
+
+    The admin's identity is verified by @admin_required (validates the Supabase
+    JWT and confirms role == 'admin') before reaching this body.
+    """
+    data = request.get_json(silent=True) or {}
     user_id = data.get('user_id')
     new_password = data.get('new_password')
-    admin_token = data.get('admin_token')
-    
-    if not all([user_id, new_password, admin_token]):
+
+    if not all([user_id, new_password]):
         return jsonify({"error": "Missing required parameters"}), 400
-    
+
     if len(new_password) < 6:
         return jsonify({"error": "Password must be at least 6 characters long"}), 400
-    
+
     try:
-        # Verify admin token - check if the user is admin
-        if not supabase:
-            return jsonify({"error": "Database not configured"}), 500
-            
-        # For simplicity, we'll check if the admin_token is provided
-        # In production, you'd decode and verify the JWT token properly
-        # For now, we'll proceed if admin_token is provided
-        
-        # Update the user's password using Supabase Admin API
-        # Use the project-specific URL
         if not SUPABASE_URL or not SUPABASE_KEY:
             return jsonify({"error": "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured"}), 500
-            
+
         url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}"
         headers = {
             "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json",
+            "apikey": SUPABASE_ANON_KEY or SUPABASE_KEY,
         }
-        
-        # Use anon key for apikey if available, otherwise use service role
-        if SUPABASE_ANON_KEY:
-            headers["apikey"] = SUPABASE_ANON_KEY
-        else:
-            headers["apikey"] = SUPABASE_KEY
-        payload = {
-            "password": new_password
-        }
-        
-        print(f"Making request to: {url}")
-        print(f"Using headers: apikey=***, Authorization=Bearer ***")
-        
-        response = requests.put(url, headers=headers, json=payload)
-        
-        print(f"Response status: {response.status_code}")
-        print(f"Response text: {response.text}")
-        
+        payload = {"password": new_password}
+
+        response = http_session.put(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+
         if response.status_code == 200:
-            print(f"Password updated successfully for user: {user_id}")
+            logger.info(f"Password updated successfully for user: {user_id}")
             return jsonify({"status": "success"})
-        else:
-            try:
-                error_data = response.json()
-                print(f"Supabase Admin API error: {error_data}")
-                return jsonify({"error": error_data.get('message', 'Failed to update password')}), response.status_code
-            except Exception:
-                print(f"Non-JSON error response: {response.text}")
-                return jsonify({"error": f"HTTP {response.status_code}: {response.text}"}), response.status_code
-            
+
+        try:
+            error_data = response.json()
+            logger.warning(f"Supabase Admin API error ({response.status_code})")
+            return jsonify({"error": error_data.get('message', 'Failed to update password')}), response.status_code
+        except Exception:
+            return jsonify({"error": f"Failed to update password (HTTP {response.status_code})"}), response.status_code
+
     except Exception as e:
-        print(f"Error updating password: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Error updating password")
+        return jsonify({"error": "Failed to update password."}), 500
 
 # --- AI CONSULTANT ROUTE ---
-
-@app.route('/chat', methods=['POST'])
-def chat():
-    data = request.json
-    user_message = data.get('message', '')
-    user_id = data.get('user_id')
-    user_name = (data.get('user_name') or '').strip()
-
 
 def _get_hardcoded_agent_response(message: str):
     """Return a hard-coded response when the user's message requests basic business/contact info."""
@@ -781,6 +865,12 @@ def _get_hardcoded_agent_response(message: str):
     return None
 
 
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json(silent=True) or {}
+    user_message = (data.get('message') or '').strip()
+    user_name = (data.get('user_name') or '').strip()
+
     if not user_message:
         return jsonify({"error": "No message provided"}), 400
 
@@ -788,6 +878,9 @@ def _get_hardcoded_agent_response(message: str):
     hard_resp = _get_hardcoded_agent_response(user_message)
     if hard_resp:
         return jsonify({"response": hard_resp})
+
+    if not openai_client:
+        return jsonify({"error": "AI consultant is not configured."}), 503
 
     try:
         # 1. Get AI Response
@@ -821,8 +914,8 @@ def _get_hardcoded_agent_response(message: str):
 
         return jsonify({"response": ai_message})
     except Exception as e:
-        print(f"AI Chat Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("AI Chat Error")
+        return jsonify({"error": "Failed to generate a response. Please try again."}), 500
 
 if __name__ == '__main__':
     # Use PORT from environment (required for Render)

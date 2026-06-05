@@ -1,5 +1,5 @@
-# Ignore the Flutter/Dart project folder
-skinbydrfizzag/
+# The Flutter app source is tracked. Build artifacts, generated files and
+# secrets are excluded by skinbydrfizzag/.gitignore (and the per-platform ones).
 
 # Ignore environment variables
 .env

@@ -1,0 +1,75 @@
+name: skinbydrfizzag
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.9
+  supabase_flutter: ^2.12.2
+  supabase: ^2.10.4
+  provider: ^6.1.2
+  intl: ^0.20.2
+  image_picker: ^1.2.1
+  rxdart: ^0.28.0
+  url_launcher: ^6.3.1
+  sign_in_with_apple: ^7.0.1
+  http: ^1.2.1
+
+  # Audio & files
+  record: ^6.2.0
+  audioplayers: ^6.6.0
+  file_picker: ^10.3.10
+
+  path_provider: ^2.1.5
+  path: ^1.9.0
+
+  # Firebase
+  firebase_core: ^4.6.0
+  firebase_messaging: ^16.1.3
+
+  # Notifications & storage
+  flutter_local_notifications: ^21.0.0
+  shared_preferences: ^2.5.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "lib/assets/icon.png"
+  # Android adaptive icon: brand-gold background + monogram foreground (kept
+  # inside the safe zone so the system mask never clips it).
+  adaptive_icon_background: "#C9A24B"
+  adaptive_icon_foreground: "lib/assets/icon_foreground.png"
+  remove_alpha_ios: true
+  min_sdk_android: 21
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - lib/assets/
+
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Poppins-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Poppins-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Poppins-Bold.ttf
+          weight: 700
