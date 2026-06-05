@@ -300,7 +300,7 @@ class _ManageProceduresScreenState extends State<ManageProceduresScreen> {
                           IconButton(
                             icon: const Icon(
                               Icons.remove_circle,
-                              color: Colors.red,
+                              color: AppColors.error,
                             ),
                             onPressed: () {
                               if (featureControllers.length > 1) {
@@ -381,7 +381,7 @@ class _ManageProceduresScreenState extends State<ManageProceduresScreen> {
               await _procedureService.deleteProcedure(id);
               if (context.mounted) Navigator.pop(context);
             },
-            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+            child: const Text("Delete", style: TextStyle(color: AppColors.error)),
           ),
         ],
       ),

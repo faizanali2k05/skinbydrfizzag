@@ -56,7 +56,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Yes", style: TextStyle(color: Colors.red)),
+            child: const Text("Yes", style: TextStyle(color: AppColors.error)),
           ),
         ],
       ),
@@ -155,7 +155,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.edit, color: Colors.blue),
+              leading: const Icon(Icons.edit, color: AppColors.info),
               title: const Text("Edit User"),
               onTap: () {
                 Navigator.pop(context);
@@ -163,7 +163,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.lock, color: Colors.amber),
+              leading: const Icon(Icons.lock, color: AppColors.accent),
               // Show different label for unregistered (WhatsApp-only) users
               title: Text(
                 _isUnregisteredUser(user)
@@ -180,7 +180,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.calendar_month, color: Colors.green),
+              leading: const Icon(Icons.calendar_month, color: AppColors.secondary),
               title: const Text("Assign Appointment"),
               onTap: () {
                 Navigator.pop(context);
@@ -198,7 +198,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
             ListTile(
               leading: Icon(
                 Icons.admin_panel_settings,
-                color: user.role == 'admin' ? Colors.red : Colors.green,
+                color: user.role == 'admin' ? AppColors.error : AppColors.success,
               ),
               title: Text(
                 user.role == 'admin' ? "Remove Admin Role" : "Make Admin",
@@ -209,18 +209,18 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
             ),
             if (user.status == 'active')
               ListTile(
-                leading: const Icon(Icons.block, color: Colors.orange),
+                leading: const Icon(Icons.block, color: AppColors.warning),
                 title: const Text("Active/Deactive"),
                 onTap: () => _updateUser(user.uid, {'status': 'deactive'}),
               )
             else
               ListTile(
-                leading: const Icon(Icons.check_circle, color: Colors.green),
+                leading: const Icon(Icons.check_circle, color: AppColors.success),
                 title: const Text("Active/Deactive"),
                 onTap: () => _updateUser(user.uid, {'status': 'active'}),
               ),
             ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
+              leading: const Icon(Icons.delete, color: AppColors.error),
               title: const Text("Delete User"),
               onTap: () => _deleteUser(user.uid),
             ),
@@ -250,14 +250,14 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.amber.withAlpha(30),
+                  color: AppColors.warning.withAlpha(30),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.amber.shade300),
+                  border: Border.all(color: AppColors.warning.withAlpha(120)),
                 ),
                 child: const Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.info_outline, color: Colors.amber, size: 20),
+                    Icon(Icons.info_outline, color: AppColors.warning, size: 20),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(

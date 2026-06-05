@@ -66,18 +66,25 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const AppLogo(width: 240, height: 100),
-                    const SizedBox(height: 28),
-                    const Text(
-                      'Skin By Dr. Fizza G',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
-                        letterSpacing: 0.2,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 20,
                       ),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(28),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.18),
+                            blurRadius: 28,
+                            offset: const Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: const AppLogo(width: 248, height: 120),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 28),
                     Text(
                       'Aesthetic care, made personal.',
                       style: TextStyle(

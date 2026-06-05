@@ -286,6 +286,7 @@ class _BookAppointmentScreenState extends State<BookAppointmentScreen> {
               Text('Clinic location', style: AppStyles.h3),
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 initialValue: _selectedLocation,
                 decoration: AppStyles.inputDecoration('Select location'),
                 items: _locations

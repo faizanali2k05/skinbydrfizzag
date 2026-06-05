@@ -120,7 +120,6 @@ class _DashboardState extends State<Dashboard> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: AppColors.background,
-      endDrawer: _buildNotificationDrawer(),
       body: SafeArea(
         child: SingleChildScrollView(
           key: const PageStorageKey('dashboard_scroll'),
@@ -165,7 +164,7 @@ class _DashboardState extends State<Dashboard> {
                     subtitle: "View upcoming visits",
                     icon: Icons.event_available,
                     color: AppColors.cardMedical,
-                    iconColor: Colors.blue,
+                    iconColor: AppColors.secondary,
                     onTap: () =>
                         Navigator.pushNamed(context, AppRoutes.appointments),
                   ),
@@ -553,8 +552,8 @@ class _DashboardState extends State<Dashboard> {
                 int.parse(timeParts[0]),
                 int.parse(timeParts[1]),
               );
-              return (appointment.status == 'booked' ||
-                      appointment.status == 'confirmed') &&
+              const upcomingStatuses = {'pending', 'booked', 'confirmed'};
+              return upcomingStatuses.contains(appointment.status) &&
                   appointmentDateTime.isAfter(DateTime.now());
             }
           } catch (e) {
@@ -617,7 +616,7 @@ class _DashboardState extends State<Dashboard> {
                               style: const TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey,
+                                color: AppColors.primary,
                               ),
                             ),
                           ],
@@ -722,9 +721,9 @@ class _DashboardState extends State<Dashboard> {
                         );
                       },
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.black,
+                        foregroundColor: AppColors.textPrimary,
                         side: BorderSide.none,
-                        backgroundColor: Colors.grey[100],
+                        backgroundColor: AppColors.surfaceMuted,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
@@ -779,12 +778,12 @@ class _DashboardState extends State<Dashboard> {
           const Icon(
             Icons.calendar_today_outlined,
             size: 48,
-            color: Colors.grey,
+            color: AppColors.textLight,
           ),
           const SizedBox(height: 12),
           const Text(
             "No upcoming appointments.",
-            style: TextStyle(color: Colors.grey, fontSize: 16),
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 16),
           ),
           const SizedBox(height: 16),
           ElevatedButton.icon(
@@ -803,64 +802,6 @@ class _DashboardState extends State<Dashboard> {
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNotificationDrawer() {
-    return Drawer(
-      child: Container(
-        color: Colors.white,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 50),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
-              child: Text("Notifications", style: AppStyles.h2),
-            ),
-            const SizedBox(height: 20),
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  _buildNotificationItem(
-                    "Special Offer",
-                    "Get 20% off on HydraFacial this week!",
-                    "5 hours ago",
-                    Icons.local_offer,
-                    Colors.orange,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNotificationItem(
-    String title,
-    String message,
-    String time,
-    IconData icon,
-    Color color,
-  ) {
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: color.withValues(alpha: 0.1),
-        child: Icon(icon, color: color, size: 20),
-      ),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 4),
-          Text(message, style: const TextStyle(fontSize: 12)),
-          const SizedBox(height: 4),
-          Text(time, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
         ],
       ),
     );
@@ -961,7 +902,7 @@ class _DashboardState extends State<Dashboard> {
             Expanded(
               child: Container(
                 width: double.infinity,
-                color: Colors.grey[200],
+                color: AppColors.surfaceMuted,
                 child: (procedure.imageUrl.isNotEmpty)
                     ? Image.network(
                         procedure.imageUrl,
@@ -970,13 +911,13 @@ class _DashboardState extends State<Dashboard> {
                             const Icon(
                               Icons.broken_image,
                               size: 40,
-                              color: Colors.grey,
+                              color: AppColors.textLight,
                             ),
                       )
                     : const Icon(
                         Icons.medical_services,
                         size: 40,
-                        color: Colors.grey,
+                        color: AppColors.primaryLight,
                       ),
               ),
             ),
@@ -1165,7 +1106,8 @@ class _DashboardState extends State<Dashboard> {
   }
 
   String _formatTime(DateTime date) {
-    final hour = date.hour > 12 ? date.hour - 12 : date.hour;
+    final rawHour = date.hour % 12;
+    final hour = rawHour == 0 ? 12 : rawHour; // 0/12 -> 12 (midnight/noon)
     final minute = date.minute.toString().padLeft(2, '0');
     final period = date.hour >= 12 ? 'PM' : 'AM';
     return "$hour:$minute $period";
@@ -1186,7 +1128,7 @@ class _DashboardState extends State<Dashboard> {
       case 'missed':
         return AppColors.error;
       default:
-        return Colors.grey;
+        return AppColors.textSecondary;
     }
   }
 }

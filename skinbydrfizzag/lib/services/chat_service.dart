@@ -211,7 +211,22 @@ class ChatService {
           );
 
           if (resp.statusCode != 200) {
-            return 'Failed to send WhatsApp message (status ${resp.statusCode}).';
+            // Surface the backend's real reason instead of a bare status code.
+            String reason = 'status ${resp.statusCode}';
+            String? hint;
+            try {
+              final body = jsonDecode(resp.body) as Map<String, dynamic>;
+              if (body['error'] != null) reason = body['error'].toString();
+              if (body['hint'] != null &&
+                  body['hint'].toString().isNotEmpty) {
+                hint = body['hint'].toString();
+              }
+            } catch (_) {}
+
+            if (resp.statusCode == 401) {
+              return 'Your admin session has expired. Please sign out and sign in again.';
+            }
+            return hint != null ? '$reason\n\n$hint' : 'Send failed: $reason';
           }
         } catch (e) {
           return 'Failed to send WhatsApp message: $e';

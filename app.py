@@ -99,18 +99,31 @@ def verify_admin():
     missing/invalid or the user is not an admin.
     """
     token = _extract_admin_token()
-    if not token or not supabase:
+    if not token:
+        logger.warning("Admin auth rejected: no bearer token in request")
+        return None
+    if not supabase:
+        logger.warning("Admin auth rejected: Supabase client not initialized on backend")
         return None
     try:
         user_resp = supabase.auth.get_user(token)
         user = getattr(user_resp, 'user', None)
         if user is None:
+            logger.warning("Admin auth rejected: token did not resolve to a user (expired/invalid JWT)")
             return None
         prof = supabase.table('profiles').select('*').eq('id', user.id).limit(1).execute()
-        if prof.data and prof.data[0].get('role') == 'admin':
-            return prof.data[0]
+        if not prof.data:
+            logger.warning(f"Admin auth rejected: no profile row for user {user.id}")
+            return None
+        if prof.data[0].get('role') != 'admin':
+            logger.warning(
+                f"Admin auth rejected: user {user.id} has role "
+                f"'{prof.data[0].get('role')}', not 'admin'"
+            )
+            return None
+        return prof.data[0]
     except Exception as e:
-        logger.warning(f"Admin token verification failed: {e}")
+        logger.warning(f"Admin token verification failed (exception): {e}")
     return None
 
 
@@ -611,8 +624,11 @@ def send_message():
         )
         
         response = http_session.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-        res_data = response.json()
-        
+        try:
+            res_data = response.json()
+        except Exception:
+            res_data = {"raw": response.text}
+
         if response.status_code == 200:
             wa_id = res_data.get('messages', [{}])[0].get('id')
             
@@ -661,9 +677,36 @@ def send_message():
             
             return jsonify({"status": "success", "wa_id": wa_id})
         else:
-            print(f"Meta API Error: {res_data}")
-            return jsonify({"error": "WhatsApp API error", "details": res_data}), response.status_code
-            
+            # The admin IS authorized (they passed @admin_required) — the failure
+            # is upstream at Meta. Forwarding Meta's raw status (often 401/403)
+            # would masquerade as an auth problem on the client, so we normalize
+            # it to 502 (Bad Gateway) and surface Meta's real reason instead.
+            meta_error = (res_data or {}).get('error', {}) if isinstance(res_data, dict) else {}
+            meta_code = meta_error.get('code')
+            meta_message = meta_error.get('message') or 'WhatsApp API error'
+
+            # Map the most common Meta failure codes to an actionable hint.
+            hints = {
+                190: "WhatsApp access token is invalid or expired. Replace WHATSAPP_TOKEN "
+                     "with a permanent System User token (Meta Business Settings → System Users).",
+                131047: "Outside the 24-hour customer service window. WhatsApp only allows "
+                        "free-form replies within 24h of the user's last message; an approved "
+                        "message template is required to re-engage.",
+                131030: "Recipient phone number is not in the allowed list (test number). "
+                        "Add the recipient under Meta → WhatsApp → API setup, or go live.",
+                100: "Invalid request parameter sent to WhatsApp (check phone number format).",
+            }
+            hint = hints.get(meta_code, "")
+            logger.warning(
+                f"WhatsApp send failed (HTTP {response.status_code}, code={meta_code}): {meta_message}"
+            )
+            return jsonify({
+                "error": meta_message,
+                "whatsapp_error_code": meta_code,
+                "hint": hint,
+                "details": res_data,
+            }), 502
+
     except Exception as e:
         print(f"Backend send_message exception: {e}")
         return jsonify({"error": str(e)}), 500
@@ -797,10 +840,22 @@ def admin_update_password():
             logger.info(f"Password updated successfully for user: {user_id}")
             return jsonify({"status": "success"})
 
+        # A WhatsApp-provisioned profile lives only in public.profiles and has no
+        # row in auth.users, so there is no password to change — Supabase returns
+        # 404 here. Give the admin an actionable message instead of a raw error.
+        if response.status_code == 404:
+            logger.warning(f"Password update target {user_id} is not an auth user (likely WhatsApp-only profile)")
+            return jsonify({
+                "error": "This contact signed in via WhatsApp and has no app login, "
+                         "so there is no password to change. Create an app account for "
+                         "them first (Add User) to set a password."
+            }), 400
+
         try:
             error_data = response.json()
-            logger.warning(f"Supabase Admin API error ({response.status_code})")
-            return jsonify({"error": error_data.get('message', 'Failed to update password')}), response.status_code
+            logger.warning(f"Supabase Admin API error ({response.status_code}): {error_data}")
+            msg = error_data.get('msg') or error_data.get('message') or 'Failed to update password'
+            return jsonify({"error": msg}), response.status_code
         except Exception:
             return jsonify({"error": f"Failed to update password (HTTP {response.status_code})"}), response.status_code
 

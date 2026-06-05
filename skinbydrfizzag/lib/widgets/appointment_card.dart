@@ -46,7 +46,7 @@ class AppointmentCard extends StatelessWidget {
                           ),
                           Text(
                             _getMonth(appointment.appointmentDate),
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey),
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
                           ),
                         ],
                       ),
@@ -120,9 +120,9 @@ class AppointmentCard extends StatelessWidget {
                       child: OutlinedButton(
                         onPressed: onReschedule,
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.black,
+                          foregroundColor: AppColors.textPrimary,
                           side: BorderSide.none,
-                          backgroundColor: Colors.grey[100],
+                          backgroundColor: AppColors.surfaceMuted,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
@@ -135,9 +135,9 @@ class AppointmentCard extends StatelessWidget {
                       child: OutlinedButton(
                         onPressed: onCancel,
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red,
-                          side: const BorderSide(color: Colors.red),
-                          backgroundColor: Colors.white,
+                          foregroundColor: AppColors.error,
+                          side: const BorderSide(color: AppColors.error),
+                          backgroundColor: AppColors.surface,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
@@ -183,7 +183,7 @@ class AppointmentCard extends StatelessWidget {
       case 'completed':
         return AppColors.primary;
       default:
-        return Colors.grey;
+        return AppColors.textSecondary;
     }
   }
 }

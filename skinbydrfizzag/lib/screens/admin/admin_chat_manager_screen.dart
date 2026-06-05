@@ -369,12 +369,12 @@ class _AdminChatManagerScreenState extends State<AdminChatManagerScreen> {
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Colors.teal, Colors.tealAccent],
+          colors: [AppColors.secondary, Color(0xFFC4D0BC)],
         ),
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.teal.withAlpha(51),
+            color: AppColors.secondary.withAlpha(51),
             blurRadius: 8,
             offset: const Offset(0, 4),
           ),
@@ -383,7 +383,7 @@ class _AdminChatManagerScreenState extends State<AdminChatManagerScreen> {
       child: ListTile(
         leading: const CircleAvatar(
           backgroundColor: Colors.white,
-          child: Icon(Icons.smart_toy, color: Colors.teal),
+          child: Icon(Icons.smart_toy, color: AppColors.secondary),
         ),
         title: const Text(
           "AI Agent Conversations",

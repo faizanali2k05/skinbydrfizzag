@@ -22,35 +22,35 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
       'subtitle': 'Manage chats between admin and users',
       'icon': Icons.chat_outlined,
       'screen': const AdminChatManagerScreen(),
-      'color': Colors.blue,
+      'color': AppColors.primary,
     },
     {
       'title': 'Manage Appointments',
       'subtitle': 'Manage appointments of various users',
       'icon': Icons.calendar_month_outlined,
       'screen': const ManageAppointmentsScreen(),
-      'color': Colors.green,
+      'color': AppColors.secondary,
     },
     {
       'title': 'Manage Users',
       'subtitle': 'View and manage application users',
       'icon': Icons.people_alt_outlined,
       'screen': const ManageUsersScreen(),
-      'color': Colors.orange,
+      'color': AppColors.accent,
     },
     {
       'title': 'Manage Procedures',
       'subtitle': 'Add and manage medical procedures',
       'icon': Icons.medical_services_outlined,
       'screen': const ManageProceduresScreen(),
-      'color': Colors.purple,
+      'color': AppColors.primaryDark,
     },
     {
       'title': 'Manage About Us',
       'subtitle': 'Edit information about the clinic',
       'icon': Icons.info_outline,
       'screen': const ManageAboutUsScreen(),
-      'color': Colors.teal,
+      'color': AppColors.info,
     },
   ];
 
@@ -65,7 +65,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
             style: TextStyle(
                 color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
         centerTitle: true,
-        backgroundColor: Colors.white,
+        backgroundColor: AppColors.surface,
         elevation: 0,
         actions: [
           IconButton(

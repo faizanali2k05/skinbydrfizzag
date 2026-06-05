@@ -357,6 +357,7 @@ class _ManageAppointmentsScreenState extends State<ManageAppointmentsScreen> {
                       }
                       final procedures = snapshot.data ?? [];
                       return DropdownButtonFormField<String>(
+                        isExpanded: true,
                         decoration: InputDecoration(
                           labelText: 'Select Procedure',
                           border: OutlineInputBorder(
@@ -471,6 +472,7 @@ class _ManageAppointmentsScreenState extends State<ManageAppointmentsScreen> {
                     builder: (context, snapshot) {
                       final locations = snapshot.data ?? [];
                       return DropdownButtonFormField<String>(
+                        isExpanded: true,
                         decoration: InputDecoration(
                           labelText: 'Clinic Location',
                           border: OutlineInputBorder(
