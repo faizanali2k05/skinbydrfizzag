@@ -1,9 +1,0 @@
-flask
-flask-cors
-openai
-gunicorn
-supabase
-python-dotenv
-requests
-firebase-admin
-
