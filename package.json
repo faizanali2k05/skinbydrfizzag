@@ -1,14 +1,50 @@
 {
-  "name": "@yourname/llm-stream",
+  "name": "@faizanali2k05/llm-stream",
   "version": "0.1.0",
   "description": "Streaming LLM output toolkit: SSE parsing plus tolerant partial-JSON parsing, emitting typed object snapshots as tokens arrive. Zero deps.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "files": ["dist", "!dist/*.test.*"],
-  "engines": { "node": ">=18" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/*.test.*",
+    "!dist/*.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/index.test.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/faizanali2k05/llm-stream.git"
+  },
+  "bugs": {
+    "url": "https://github.com/faizanali2k05/llm-stream/issues"
+  },
+  "homepage": "https://github.com/faizanali2k05/llm-stream#readme",
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
   "sideEffects": false,
-  "keywords": ["llm", "ai", "typescript", "zero-dependency"]
+  "keywords": [
+    "llm",
+    "ai",
+    "sse",
+    "partial-json",
+    "streaming",
+    "typescript",
+    "zero-dependency"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
+  }
 }
